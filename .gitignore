@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+checkpoints/
+runs/
+*.pt
+*.pth
+*.csv
+workspace/smoke_runs/
