@@ -1,7 +1,7 @@
 # oSTRich RNN STR detector
 
 <p align="center">
-  <img src="181bd6fe-5b3b-42bc-97e6-81e66178f051.png" alt="oSTRich logo" width="240">
+  <img src="ostrich_rnn/181bd6fe-5b3b-42bc-97e6-81e66178f051.png" alt="oSTRich logo" width="240">
 </p>
 
 This is a modular PyTorch starter implementation for detecting short tandem
@@ -101,6 +101,7 @@ Train a synthetic model:
 ```bash
 python3 examples/train_synthetic.py \
   --epochs 10 \
+  --patience 3 \
   --train-size 1000 \
   --val-size 200 \
   --sequence-length 1024 \
@@ -112,6 +113,9 @@ python3 examples/train_synthetic.py \
 `--device auto` uses CUDA when PyTorch can see a GPU and falls back to CPU
 otherwise. Use `--device cuda` if you want the run to fail unless the GPU is
 available.
+
+`--patience` controls early stopping. For example, `--patience 8` lets training
+continue until validation loss has failed to improve for 8 consecutive epochs.
 
 Synthetic sequences are 1024 bp by default. Repeats are perfect by default:
 substitution, insertion, deletion, and motif-interruption rates are all `0.0`

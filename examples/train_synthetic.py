@@ -32,6 +32,7 @@ from ostrich_rnn.training import TrainConfig, train_model
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type=int, default=2)
+    parser.add_argument("--patience", type=int, default=3, help="Stop after this many epochs without validation loss improvement.")
     parser.add_argument("--train-size", type=int, default=128)
     parser.add_argument("--val-size", type=int, default=32)
     parser.add_argument("--sequence-length", type=int, default=1024)
@@ -111,8 +112,9 @@ def main() -> None:
             run_dir / "data",
             config={
                 "train_size": args.train_size,
-                "val_size": args.val_size,
-                "sequence_length": args.sequence_length,
+            "val_size": args.val_size,
+            "patience": args.patience,
+            "sequence_length": args.sequence_length,
                 "min_repeats_per_sequence": args.min_repeats_per_sequence,
                 "max_repeats_per_sequence": args.max_repeats_per_sequence,
                 "min_motif_len": args.min_motif_len,
@@ -151,7 +153,7 @@ def main() -> None:
         epochs=args.epochs,
         batch_size=args.batch_size,
         validation_fraction=validation_fraction,
-        patience=3,
+        patience=args.patience,
         checkpoint_dir=str(run_dir / "checkpoints"),
     )
     result = train_model(model, dataset, motif_vocab, config, device=device)
