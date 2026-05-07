@@ -9,3 +9,4 @@ runs/
 *.csv
 workspace/smoke_runs/
 benchmarks/
+benchmark_configs/
