@@ -7,7 +7,7 @@ from typing import Sequence
 
 import torch
 
-from .labels import PAD_MOTIF_LABEL, PAD_STATE_LABEL
+from .labels import PAD_MOTIF_LABEL, PAD_MOTIF_LENGTH_LABEL, PAD_STATE_LABEL
 
 
 BASE_TO_ID = {"A": 0, "C": 1, "G": 2, "T": 3, "N": 4}
@@ -32,6 +32,7 @@ class EncodedBatch:
     lengths: torch.Tensor
     state_labels: torch.Tensor | None = None
     motif_labels: torch.Tensor | None = None
+    motif_length_labels: torch.Tensor | None = None
     sequences: list[str] | None = None
     repeats: list[list[dict]] | None = None
 
@@ -44,6 +45,7 @@ def collate_examples(examples: list[dict]) -> EncodedBatch:
     input_ids = torch.full((len(examples), max_len), PAD_BASE_ID, dtype=torch.long)
     state_labels = torch.full((len(examples), max_len), PAD_STATE_LABEL, dtype=torch.long)
     motif_labels = torch.full((len(examples), max_len), PAD_MOTIF_LABEL, dtype=torch.long)
+    motif_length_labels = torch.full((len(examples), max_len), PAD_MOTIF_LENGTH_LABEL, dtype=torch.long)
 
     for row, example in enumerate(examples):
         encoded = encode_sequence(example["sequence"])
@@ -53,6 +55,8 @@ def collate_examples(examples: list[dict]) -> EncodedBatch:
             state_labels[row, :length] = torch.as_tensor(example["state_labels"], dtype=torch.long)
         if "motif_labels" in example and example["motif_labels"] is not None:
             motif_labels[row, :length] = torch.as_tensor(example["motif_labels"], dtype=torch.long)
+        if "motif_length_labels" in example and example["motif_length_labels"] is not None:
+            motif_length_labels[row, :length] = torch.as_tensor(example["motif_length_labels"], dtype=torch.long)
 
     return EncodedBatch(
         sequence_ids=[example.get("sequence_id", f"seq_{i}") for i, example in enumerate(examples)],
@@ -60,6 +64,7 @@ def collate_examples(examples: list[dict]) -> EncodedBatch:
         lengths=lengths,
         state_labels=state_labels,
         motif_labels=motif_labels,
+        motif_length_labels=motif_length_labels,
         sequences=[example["sequence"] for example in examples],
         repeats=[example.get("repeats", []) for example in examples],
     )

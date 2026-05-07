@@ -13,6 +13,8 @@ The model frames STR detection as sequence labeling:
 - each base is labeled as outside, repeat start, repeat inside, or repeat end
 - a second per-base head predicts the repeat motif class for bases inside a
   tract
+- a third per-base head predicts motif length, which helps constrain motif
+  learning
 - post-processing converts base-level predictions into a repeat table
 
 The synthetic generator is deliberately separated from the dataset/model code so
@@ -28,10 +30,14 @@ real labeled data can later replace it.
 - `ostrich_rnn/postprocess.py` - repeat tract extraction and motif estimation
 - `ostrich_rnn/evaluation.py` - base-level and tract-level metrics
 - `ostrich_rnn/training.py` - training loop, validation, checkpoints, early stopping
+- `ostrich_rnn/benchmark.py` - automated benchmark sweeps and comparison tables
+- `ostrich_rnn/benchmark_report.py` - benchmark interpretation reports and plots
 - `ostrich_rnn/runtime.py` - CPU/GPU device selection helpers
 - `ostrich_rnn/synthetic_io.py` - saving generated synthetic datasets and summaries
 - `ostrich_rnn/inference.py` - FASTA-to-CSV inference
-- `examples/train_synthetic.py` - brief synthetic training run
+- `scripts/train_synthetic.py` - brief synthetic training run
+- `scripts/benchmark_synthetic.py` - JSON-driven synthetic benchmark runner
+- `scripts/benchmark_interpret.py` - benchmark plotting and interpretation runner
 - `tests/test_sanity.py` - simple sanity checks
 
 ## Quick start
@@ -51,7 +57,7 @@ pytest -q
 Run a tiny synthetic training example:
 
 ```bash
-python examples/train_synthetic.py --epochs 2 --train-size 128 --val-size 32
+python scripts/train_synthetic.py --epochs 2 --train-size 128 --val-size 32
 ```
 
 Run inference after training:
@@ -99,7 +105,7 @@ python3 -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get
 Train a synthetic model:
 
 ```bash
-python3 examples/train_synthetic.py \
+python3 scripts/train_synthetic.py \
   --epochs 10 \
   --patience 3 \
   --train-size 1000 \
@@ -107,6 +113,10 @@ python3 examples/train_synthetic.py \
   --sequence-length 1024 \
   --max-motif-len 6 \
   --batch-size 16 \
+  --hidden-dim 128 \
+  --num-layers 1 \
+  --motif-loss-weight 0.2 \
+  --motif-length-loss-weight 0.1 \
   --device auto
 ```
 
@@ -117,12 +127,23 @@ available.
 `--patience` controls early stopping. For example, `--patience 8` lets training
 continue until validation loss has failed to improve for 8 consecutive epochs.
 
+Motif class weighting is enabled by default. This upweights rare motif classes
+in the motif cross-entropy loss so common motifs do not dominate training. Use
+`--no-motif-class-weighting` to disable it. The motif identity and motif-length
+auxiliary losses are controlled with `--motif-loss-weight` and
+`--motif-length-loss-weight`. The defaults are intentionally modest, `0.2` and
+`0.1`, so boundary detection remains the main training objective.
+
+The default RNN capacity for the synthetic training script is
+`--hidden-dim 128 --num-layers 1`. Increase `--num-layers` to `2` only if
+validation metrics suggest the one-layer model is underfitting.
+
 Synthetic sequences are 1024 bp by default. Repeats are perfect by default:
 substitution, insertion, deletion, and motif-interruption rates are all `0.0`
 unless you explicitly enable them. To generate imperfect repeats:
 
 ```bash
-python3 examples/train_synthetic.py \
+python3 scripts/train_synthetic.py \
   --epochs 10 \
   --train-size 1000 \
   --val-size 200 \
@@ -175,7 +196,7 @@ counts, and total interruption count.
 Train from an existing saved synthetic dataset:
 
 ```bash
-python3 examples/train_synthetic.py \
+python3 scripts/train_synthetic.py \
   --synthetic-data runs/<previous_run>/data/records.jsonl \
   --epochs 10 \
   --batch-size 16 \
@@ -195,6 +216,51 @@ When `--synthetic-data` is provided, no new synthetic dataset is generated. A
 new run directory is still created for the checkpoint and a small
 `source_dataset.json` file that records which dataset was used.
 
+Train with a synthetic curriculum:
+
+```bash
+python3 scripts/train_synthetic.py \
+  --curriculum \
+  --epochs 60 \
+  --curriculum-phase-epochs 20,35,45 \
+  --patience 6 \
+  --train-size 2000 \
+  --val-size 400 \
+  --batch-size 16 \
+  --device cuda \
+  --max-copy-number 80
+```
+
+Curriculum mode trains the same model through three generated datasets:
+
+- `phase1_perfect`: perfect simple repeats, no mutations, no interruptions, no compounds
+- `phase2_low_imperfect`: low mutation/interruption rates and rare compounds
+- `phase3_harder_imperfect_compound`: higher mutation/interruption rates and more compounds
+
+`--curriculum-phase-epochs` is interpreted as percentages of `--epochs`, not
+literal epoch counts. The default is `20,35,45`, so `--epochs 60` trains the
+three phases for `12`, `21`, and `27` epochs. If percentages do not produce whole
+epochs, they are rounded and adjusted so the phase epochs still add up exactly
+to `--epochs`.
+
+Each phase writes its own data directory:
+
+```text
+runs/<run_name>/data/phase1_perfect/
+runs/<run_name>/data/phase2_low_imperfect/
+runs/<run_name>/data/phase3_harder_imperfect_compound/
+```
+
+Each phase also writes its own checkpoint directory. After phase 3, the final
+phase best checkpoint is copied to:
+
+```text
+runs/<run_name>/checkpoints/best.pt
+```
+
+The run directory also contains `curriculum_summary.json`, which records the
+phase datasets and checkpoints used.
+
 Run FASTA inference with a trained checkpoint:
 
 ```bash
@@ -213,6 +279,147 @@ sequence_id,start,end,length_bp,motif,motif_length,copy_number,confidence
 seq_001,145,184,39,CAG,3,13.00,0.94
 ```
 
+Run an automated benchmark sweep:
+
+```bash
+python3 scripts/benchmark_synthetic.py --write-template benchmark_config.json
+python3 scripts/benchmark_synthetic.py --config benchmark_config.json --device auto
+```
+
+A ready-to-run pilot grid is included:
+
+```bash
+python3 scripts/benchmark_synthetic.py \
+  --config benchmark_configs/ostrich_grid_pilot.json \
+  --device auto
+```
+
+The benchmark runner creates one shared dataset, trains each experiment against
+that same dataset/split, and writes a comparison table. Each benchmark directory
+contains:
+
+```text
+benchmarks/<benchmark_name>/
+benchmarks/<benchmark_name>/benchmark_config.json
+benchmarks/<benchmark_name>/environment.json
+benchmarks/<benchmark_name>/source_dataset.json
+benchmarks/<benchmark_name>/comparison.csv
+benchmarks/<benchmark_name>/comparison.json
+benchmarks/<benchmark_name>/data/records.jsonl
+benchmarks/<benchmark_name>/data/dataset_summary.json
+benchmarks/<benchmark_name>/experiments/01_baseline/experiment_config.json
+benchmarks/<benchmark_name>/experiments/01_baseline/history.csv
+benchmarks/<benchmark_name>/experiments/01_baseline/history.json
+benchmarks/<benchmark_name>/experiments/01_baseline/metrics.json
+benchmarks/<benchmark_name>/experiments/01_baseline/checkpoints/best.pt
+```
+
+Use benchmark experiments to compare training settings, model sizes, auxiliary
+loss weights, class weighting, imperfect-repeat data, or any other variable that
+should be tested against a fixed dataset:
+
+```json
+{
+  "benchmark_name": "motif_loss_sweep",
+  "output_root": "benchmarks",
+  "device": "auto",
+  "dataset": {
+    "train_size": 1000,
+    "val_size": 200,
+    "sequence_length": 1024,
+    "max_motif_len": 6,
+    "max_copy_number": 100,
+    "substitution_rate": 0.0,
+    "insertion_rate": 0.0,
+    "deletion_rate": 0.0,
+    "motif_interruption_rate": 0.0,
+    "seed": 7
+  },
+  "model": {
+    "hidden_dim": 128,
+    "num_layers": 1
+  },
+  "training": {
+    "epochs": 10,
+    "batch_size": 16,
+    "patience": 3,
+    "motif_loss_weight": 0.2,
+    "motif_length_loss_weight": 0.1,
+    "motif_class_weighting": true
+  },
+  "experiments": [
+    {
+      "name": "baseline"
+    },
+    {
+      "name": "higher_motif_loss",
+      "training": {
+        "motif_loss_weight": 0.5
+      }
+    },
+    {
+      "name": "larger_model",
+      "model": {
+        "hidden_dim": 256,
+        "num_layers": 2
+      }
+    }
+  ]
+}
+```
+
+For factorial sweeps, use the compact `matrix` form instead of hand-writing
+every experiment. The pilot grid tests batch size, hidden dimension, one versus
+two layers, epoch count, and curriculum on/off:
+
+```json
+{
+  "matrix": {
+    "batch_size": [8, 16],
+    "hidden_dim": [64, 128],
+    "num_layers": [1, 2],
+    "epochs": [3, 6],
+    "curriculum": [false, true]
+  }
+}
+```
+
+Curriculum experiments train through the configured phase datasets, then every
+experiment is evaluated against the same saved holdout dataset. This makes the
+final `holdout_*` columns in `comparison.csv` the fairest way to compare normal
+training against curriculum training.
+
+To benchmark against a previously saved synthetic dataset instead of generating
+a new one, set `dataset.synthetic_data` to a `records.jsonl`, data directory, or
+run directory. The runner records the source path in `source_dataset.json`.
+
+Create plots and an interpretation report after a benchmark finishes:
+
+```bash
+python3 -m pip install -r requirements.txt
+python3 scripts/benchmark_interpret.py benchmarks/batch_hidden_layers_epochs_curriculum_pilot
+```
+
+This writes:
+
+```text
+benchmarks/batch_hidden_layers_epochs_curriculum_pilot/report/report.html
+benchmarks/batch_hidden_layers_epochs_curriculum_pilot/report/summary.md
+benchmarks/batch_hidden_layers_epochs_curriculum_pilot/report/ranked_results.csv
+benchmarks/batch_hidden_layers_epochs_curriculum_pilot/report/top_runs.png
+benchmarks/batch_hidden_layers_epochs_curriculum_pilot/report/factor_effects.png
+benchmarks/batch_hidden_layers_epochs_curriculum_pilot/report/hidden_dim_by_batch_size.png
+```
+
+By default, the report ranks settings by `holdout_tract_f1`. To rank by another
+metric:
+
+```bash
+python3 scripts/benchmark_interpret.py \
+  benchmarks/batch_hidden_layers_epochs_curriculum_pilot \
+  --metric holdout_motif_accuracy
+```
+
 Programmatic training looks like this:
 
 ```python
@@ -220,7 +427,7 @@ from ostrich_rnn.dataset import STRRecordDataset
 from ostrich_rnn.model import RNNSTRDetector
 from ostrich_rnn.motifs import MotifVocab
 from ostrich_rnn.synthetic import SyntheticSTRGenerator
-from ostrich_rnn.synthetic_io import make_unique_run_dir, save_synthetic_dataset
+from ostrich_rnn.synthetic_io import add_motif_length_labels, make_unique_run_dir, save_synthetic_dataset
 from ostrich_rnn.training import TrainConfig, train_model
 
 motif_vocab = MotifVocab.build(max_len=6)
@@ -236,12 +443,25 @@ generator = SyntheticSTRGenerator(
     seed=7,
 )
 records = generator.generate_many(1200)
+add_motif_length_labels(records, motif_vocab)
 run_dir = make_unique_run_dir("runs")
 save_synthetic_dataset(records, run_dir / "data", config={"seed": 7})
 
 dataset = STRRecordDataset(records)
-model = RNNSTRDetector(motif_classes=len(motif_vocab), hidden_dim=128)
-config = TrainConfig(epochs=10, batch_size=16, checkpoint_dir=str(run_dir / "checkpoints"))
+model = RNNSTRDetector(
+    motif_classes=len(motif_vocab),
+    motif_length_classes=6,
+    hidden_dim=128,
+    num_layers=1,
+)
+config = TrainConfig(
+    epochs=10,
+    batch_size=16,
+    motif_loss_weight=0.2,
+    motif_length_loss_weight=0.1,
+    motif_class_weighting=True,
+    checkpoint_dir=str(run_dir / "checkpoints"),
+)
 
 train_model(model, dataset, motif_vocab, config)
 ```
@@ -268,6 +488,7 @@ record = {
     "sequence": "ACGTCAGCAGCAGTT",
     "state_labels": [0] * 4 + [1] + [2] * 7 + [3] + [0] * 2,
     "motif_labels": [-100] * 4 + [cag_id] * 9 + [-100] * 2,
+    "motif_length_labels": [-100] * 4 + [2] * 9 + [-100] * 2,
     "repeats": [
         {
             "start": 4,
@@ -284,7 +505,16 @@ record = {
 
 Repeat-state labels are `0=outside`, `1=start`, `2=inside`, and `3=end`.
 Motif labels use IDs from `MotifVocab`; outside-repeat bases should use `-100`
-so the motif loss ignores them.
+so the motif loss ignores them. Motif-length labels are 0-based, so motif length
+1 uses class `0`, length 2 uses class `1`, and length 3 uses class `2`.
+Outside-repeat bases should also use `-100` for this head.
+
+During training, progress lines include both motif identity and motif-length
+accuracy:
+
+```text
+epoch=1 train_loss=5.1748 val_loss=5.0719 base_f1=0.403 tract_f1=0.200 motif_acc=0.000 motif_len_acc=0.381
+```
 
 ## Design notes
 
@@ -300,8 +530,13 @@ follows.
 
 Motif prediction is handled by a second per-base classification head. During
 training, bases inside a repeat are assigned the canonical motif class for that
-tract; outside bases use an ignore label. During post-processing, motif evidence
-from the model is combined with a direct sequence-based motif estimate.
+tract; outside bases use an ignore label. During post-processing, final motif
+calls are driven primarily by sequence periodicity scoring over the predicted
+tract. The neural motif head is still used as supporting evidence, but the
+reported motif is usually recovered directly from the DNA sequence.
+Motif length is handled by a separate per-base head with classes for motif
+lengths 1 through the configured maximum. This gives the model an easier
+auxiliary task and can improve motif identity learning.
 By default motifs are strand-specific, so `A` and `T` are separate classes. Use
 `MotifVocab.build(collapse_reverse_complement=True)` if you want
 reverse-complement-equivalent motifs collapsed.

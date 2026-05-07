@@ -1,0 +1,223 @@
+{
+  "benchmark_name": "epochs_data_curriculum",
+  "output_root": "benchmarks",
+  "device": "auto",
+  "continue_on_error": true,
+  "dataset": {
+    "sequence_length": 1024,
+    "min_repeats_per_sequence": 1,
+    "max_repeats_per_sequence": 3,
+    "min_motif_len": 1,
+    "max_motif_len": 6,
+    "min_copy_number": 3,
+    "max_copy_number": 100,
+    "compound_probability": 0.2,
+    "max_compound_motifs": 3,
+    "substitution_rate": 0.0,
+    "insertion_rate": 0.0,
+    "deletion_rate": 0.0,
+    "motif_interruption_rate": 0.0,
+    "interruption_min_len": null,
+    "interruption_max_len": null,
+    "seed": 17,
+    "collapse_reverse_complement": false
+  },
+  "holdout": {
+    "size": 500,
+    "sequence_length": 1024,
+    "min_repeats_per_sequence": 1,
+    "max_repeats_per_sequence": 3,
+    "max_copy_number": 100,
+    "compound_probability": 0.3,
+    "substitution_rate": 0.005,
+    "insertion_rate": 0.001,
+    "deletion_rate": 0.001,
+    "motif_interruption_rate": 0.02,
+    "seed": 5017
+  },
+  "model": {
+    "embedding_dim": 16,
+    "hidden_dim": 128,
+    "num_layers": 1,
+    "dropout": 0.2,
+    "rnn_type": "lstm"
+  },
+  "training": {
+    "batch_size": 8,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "motif_loss_weight": 0.2,
+    "motif_length_loss_weight": 0.1,
+    "motif_class_weighting": true,
+    "patience": 5,
+    "num_workers": 0
+  },
+  "curriculum": {
+    "phases": [
+      {
+        "name": "phase1_perfect",
+        "dataset": {
+          "compound_probability": 0.0,
+          "substitution_rate": 0.0,
+          "insertion_rate": 0.0,
+          "deletion_rate": 0.0,
+          "motif_interruption_rate": 0.0
+        }
+      },
+      {
+        "name": "phase2_low_imperfect",
+        "dataset": {
+          "compound_probability": 0.05,
+          "substitution_rate": 0.002,
+          "insertion_rate": 0.0005,
+          "deletion_rate": 0.0005,
+          "motif_interruption_rate": 0.01
+        }
+      },
+      {
+        "name": "phase3_harder_imperfect_compound",
+        "dataset": {
+          "compound_probability": 0.3,
+          "substitution_rate": 0.01,
+          "insertion_rate": 0.002,
+          "deletion_rate": 0.002,
+          "motif_interruption_rate": 0.05
+        }
+      }
+    ]
+  },
+  "experiments": [
+    {
+      "name": "data600_epochs10_curriculum",
+      "curriculum": true,
+      "dataset": {
+        "train_size": 500,
+        "val_size": 100
+      },
+      "training": {
+        "epochs": 10
+      }
+    },
+    {
+      "name": "data600_epochs20_curriculum",
+      "curriculum": true,
+      "dataset": {
+        "train_size": 500,
+        "val_size": 100
+      },
+      "training": {
+        "epochs": 20
+      }
+    },
+    {
+      "name": "data600_epochs40_curriculum",
+      "curriculum": true,
+      "dataset": {
+        "train_size": 500,
+        "val_size": 100
+      },
+      "training": {
+        "epochs": 40
+      }
+    },
+    {
+      "name": "data1200_epochs10_curriculum",
+      "curriculum": true,
+      "dataset": {
+        "train_size": 1000,
+        "val_size": 200
+      },
+      "training": {
+        "epochs": 10
+      }
+    },
+    {
+      "name": "data1200_epochs20_curriculum",
+      "curriculum": true,
+      "dataset": {
+        "train_size": 1000,
+        "val_size": 200
+      },
+      "training": {
+        "epochs": 20
+      }
+    },
+    {
+      "name": "data1200_epochs40_curriculum",
+      "curriculum": true,
+      "dataset": {
+        "train_size": 1000,
+        "val_size": 200
+      },
+      "training": {
+        "epochs": 40
+      }
+    },
+    {
+      "name": "data2400_epochs10_curriculum",
+      "curriculum": true,
+      "dataset": {
+        "train_size": 2000,
+        "val_size": 400
+      },
+      "training": {
+        "epochs": 10
+      }
+    },
+    {
+      "name": "data2400_epochs20_curriculum",
+      "curriculum": true,
+      "dataset": {
+        "train_size": 2000,
+        "val_size": 400
+      },
+      "training": {
+        "epochs": 20
+      }
+    },
+    {
+      "name": "data2400_epochs40_curriculum",
+      "curriculum": true,
+      "dataset": {
+        "train_size": 2000,
+        "val_size": 400
+      },
+      "training": {
+        "epochs": 40
+      }
+    },
+    {
+      "name": "data4800_epochs10_curriculum",
+      "curriculum": true,
+      "dataset": {
+        "train_size": 4000,
+        "val_size": 800
+      },
+      "training": {
+        "epochs": 10
+      }
+    },
+    {
+      "name": "data4800_epochs20_curriculum",
+      "curriculum": true,
+      "dataset": {
+        "train_size": 4000,
+        "val_size": 800
+      },
+      "training": {
+        "epochs": 20
+      }
+    },
+    {
+      "name": "data4800_epochs40_curriculum",
+      "curriculum": true,
+      "dataset": {
+        "train_size": 4000,
+        "val_size": 800
+      },
+      "training": {
+        "epochs": 40
+      }
+    }
+  ]
+}

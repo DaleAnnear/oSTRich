@@ -68,8 +68,9 @@ def load_model_from_checkpoint(checkpoint_path: str | Path, device: torch.device
     )
     model_config = checkpoint.get("model_config") or {"motif_classes": len(motif_vocab)}
     model_config["motif_classes"] = len(motif_vocab)
+    model_config.setdefault("motif_length_classes", max(len(motif) for motif in motif_vocab.motifs))
     model = RNNSTRDetector(**model_config)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model.load_state_dict(checkpoint["model_state_dict"], strict=False)
     model.to(device)
     model.eval()
     return model, motif_vocab
@@ -116,6 +117,7 @@ def predict_records(
                 sequence=sequence,
                 state_logits=outputs.state_logits[i].cpu(),
                 motif_logits=outputs.motif_logits[i].cpu(),
+                motif_length_logits=outputs.motif_length_logits[i].cpu(),
                 motif_vocab=motif_vocab,
             )
             for call in window_calls:

@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, random_split
 
 from .encoding import EncodedBatch, collate_examples
 from .evaluation import evaluate_model
-from .labels import PAD_MOTIF_LABEL, PAD_STATE_LABEL, RepeatState
+from .labels import PAD_MOTIF_LABEL, PAD_MOTIF_LENGTH_LABEL, PAD_STATE_LABEL, RepeatState
 from .runtime import describe_device, resolve_device
 
 
@@ -22,6 +22,8 @@ def move_batch(batch: EncodedBatch, device: torch.device) -> EncodedBatch:
         batch.state_labels = batch.state_labels.to(device)
     if batch.motif_labels is not None:
         batch.motif_labels = batch.motif_labels.to(device)
+    if batch.motif_length_labels is not None:
+        batch.motif_length_labels = batch.motif_length_labels.to(device)
     return batch
 
 
@@ -42,17 +44,59 @@ class TrainConfig:
     batch_size: int = 16
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
-    motif_loss_weight: float = 0.5
+    motif_loss_weight: float = 0.2
+    motif_length_loss_weight: float = 0.1
+    motif_class_weighting: bool = True
     validation_fraction: float = 0.2
     patience: int = 5
     checkpoint_dir: str = "checkpoints"
     num_workers: int = 0
 
 
-def compute_loss(outputs, batch: EncodedBatch, state_loss_fn, motif_loss_fn, motif_loss_weight: float) -> torch.Tensor:
+def class_weights_from_dataset(dataset, label_key: str, num_classes: int, pad_label: int, device: torch.device):
+    """Build inverse-sqrt class weights from labels in the current dataset."""
+
+    counts = torch.zeros(num_classes, dtype=torch.float32)
+    for idx in range(len(dataset)):
+        labels = dataset[idx].get(label_key)
+        if labels is None:
+            continue
+        labels_tensor = torch.as_tensor(labels, dtype=torch.long)
+        valid = labels_tensor != pad_label
+        if bool(valid.any()):
+            counts += torch.bincount(labels_tensor[valid], minlength=num_classes).float()
+    seen = counts > 0
+    if not bool(seen.any()):
+        return None
+    weights = torch.zeros(num_classes, dtype=torch.float32)
+    mean_count = counts[seen].mean()
+    weights[seen] = torch.sqrt(mean_count / counts[seen]).clamp(0.1, 10.0)
+    weights[seen] = weights[seen] / weights[seen].mean()
+    return weights.to(device)
+
+
+def compute_loss(
+    outputs,
+    batch: EncodedBatch,
+    state_loss_fn,
+    motif_loss_fn,
+    motif_length_loss_fn,
+    motif_loss_weight: float,
+    motif_length_loss_weight: float,
+) -> torch.Tensor:
     state_loss = state_loss_fn(outputs.state_logits.transpose(1, 2), batch.state_labels)
-    motif_loss = motif_loss_fn(outputs.motif_logits.transpose(1, 2), batch.motif_labels)
-    return state_loss + motif_loss_weight * motif_loss
+    if bool((batch.motif_labels != PAD_MOTIF_LABEL).any()):
+        motif_loss = motif_loss_fn(outputs.motif_logits.transpose(1, 2), batch.motif_labels)
+    else:
+        motif_loss = outputs.state_logits.sum() * 0.0
+    if bool((batch.motif_length_labels != PAD_MOTIF_LENGTH_LABEL).any()):
+        motif_length_loss = motif_length_loss_fn(
+            outputs.motif_length_logits.transpose(1, 2),
+            batch.motif_length_labels,
+        )
+    else:
+        motif_length_loss = outputs.state_logits.sum() * 0.0
+    return state_loss + motif_loss_weight * motif_loss + motif_length_loss_weight * motif_length_loss
 
 
 def make_loaders(dataset, config: TrainConfig) -> tuple[DataLoader, DataLoader]:
@@ -99,7 +143,19 @@ def train_model(model, dataset, motif_vocab, config: TrainConfig, device: str | 
     train_loader, val_loader = make_loaders(dataset, config)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     state_loss_fn = nn.CrossEntropyLoss(weight=default_state_weights(device), ignore_index=PAD_STATE_LABEL)
-    motif_loss_fn = nn.CrossEntropyLoss(ignore_index=PAD_MOTIF_LABEL)
+    motif_weight = None
+    if config.motif_class_weighting:
+        motif_weight = class_weights_from_dataset(dataset, "motif_labels", len(motif_vocab), PAD_MOTIF_LABEL, device)
+    motif_length_classes = model.config.get("motif_length_classes", 6)
+    motif_length_weight = class_weights_from_dataset(
+        dataset,
+        "motif_length_labels",
+        motif_length_classes,
+        PAD_MOTIF_LENGTH_LABEL,
+        device,
+    )
+    motif_loss_fn = nn.CrossEntropyLoss(weight=motif_weight, ignore_index=PAD_MOTIF_LABEL)
+    motif_length_loss_fn = nn.CrossEntropyLoss(weight=motif_length_weight, ignore_index=PAD_MOTIF_LENGTH_LABEL)
 
     best_val = float("inf")
     bad_epochs = 0
@@ -113,7 +169,15 @@ def train_model(model, dataset, motif_vocab, config: TrainConfig, device: str | 
             batch = move_batch(batch, device)
             optimizer.zero_grad(set_to_none=True)
             outputs = model(batch.input_ids, batch.lengths)
-            loss = compute_loss(outputs, batch, state_loss_fn, motif_loss_fn, config.motif_loss_weight)
+            loss = compute_loss(
+                outputs,
+                batch,
+                state_loss_fn,
+                motif_loss_fn,
+                motif_length_loss_fn,
+                config.motif_loss_weight,
+                config.motif_length_loss_weight,
+            )
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
@@ -125,7 +189,15 @@ def train_model(model, dataset, motif_vocab, config: TrainConfig, device: str | 
             for batch in val_loader:
                 batch = move_batch(batch, device)
                 outputs = model(batch.input_ids, batch.lengths)
-                loss = compute_loss(outputs, batch, state_loss_fn, motif_loss_fn, config.motif_loss_weight)
+                loss = compute_loss(
+                    outputs,
+                    batch,
+                    state_loss_fn,
+                    motif_loss_fn,
+                    motif_length_loss_fn,
+                    config.motif_loss_weight,
+                    config.motif_length_loss_weight,
+                )
                 val_losses.append(float(loss.item()))
 
         train_loss = sum(train_losses) / max(1, len(train_losses))
@@ -138,11 +210,13 @@ def train_model(model, dataset, motif_vocab, config: TrainConfig, device: str | 
             "base_f1": metrics.base["f1"],
             "tract_f1": metrics.tract["f1"],
             "motif_accuracy": metrics.motif_accuracy,
+            "motif_length_accuracy": metrics.motif_length_accuracy,
         }
         history.append(row)
         print(
             f"epoch={epoch} train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
-            f"base_f1={row['base_f1']:.3f} tract_f1={row['tract_f1']:.3f} motif_acc={row['motif_accuracy']:.3f}"
+            f"base_f1={row['base_f1']:.3f} tract_f1={row['tract_f1']:.3f} "
+            f"motif_acc={row['motif_accuracy']:.3f} motif_len_acc={row['motif_length_accuracy']:.3f}"
         )
 
         if val_loss < best_val:

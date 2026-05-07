@@ -9,6 +9,8 @@ from pathlib import Path
 from statistics import mean, median
 from uuid import uuid4
 
+from .labels import PAD_MOTIF_LABEL, PAD_MOTIF_LENGTH_LABEL
+
 
 def make_unique_run_dir(root: str | Path = "runs", prefix: str = "synthetic", name: str | None = None) -> Path:
     root = Path(root)
@@ -206,6 +208,36 @@ def save_synthetic_dataset(records: list[dict], output_dir: str | Path, config: 
 def load_records_jsonl(path: str | Path) -> list[dict]:
     with Path(path).open() as handle:
         return [json.loads(line) for line in handle if line.strip()]
+
+
+def add_motif_length_labels(records: list[dict], motif_vocab) -> list[dict]:
+    """Backfill per-base motif-length labels for generated or loaded records.
+
+    Labels are 0-based classes: motif length 1 -> class 0, motif length 6 ->
+    class 5. Outside-repeat bases use PAD_MOTIF_LENGTH_LABEL.
+    """
+
+    for record in records:
+        sequence_length = len(record["sequence"])
+        existing = record.get("motif_length_labels")
+        if existing is not None and len(existing) == sequence_length:
+            continue
+        labels = [PAD_MOTIF_LENGTH_LABEL] * sequence_length
+        motif_labels = record.get("motif_labels")
+        if motif_labels is not None:
+            for idx, motif_id in enumerate(motif_labels[:sequence_length]):
+                if int(motif_id) != PAD_MOTIF_LABEL:
+                    labels[idx] = len(motif_vocab.decode(int(motif_id))) - 1
+        else:
+            for repeat in record.get("repeats", []):
+                motifs = repeat.get("motifs", [])
+                if not motifs:
+                    continue
+                motif_length_id = len(motifs[0]) - 1
+                for idx in range(int(repeat["start"]), min(sequence_length, int(repeat["end"]))):
+                    labels[idx] = motif_length_id
+        record["motif_length_labels"] = labels
+    return records
 
 
 def resolve_records_path(path: str | Path) -> Path:

@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 
 from .labels import RepeatState
-from .motifs import MotifVocab, canonical_motif, shortest_period
+from .motifs import DNA_ALPHABET, MotifVocab, canonical_motif, rotations, shortest_period
 
 
 @dataclass
@@ -57,27 +57,59 @@ def contiguous_regions(mask: list[bool], min_length: int = 1, merge_gap: int = 0
 def estimate_motif_from_sequence(
     tract: str,
     motif_vocab: MotifVocab,
-    max_motif_len: int = 8,
+    max_motif_len: int | None = None,
+    length_priors: dict[int, float] | None = None,
 ) -> tuple[str, float]:
-    """Estimate dominant motif by minimizing mismatch rate over periodic units."""
+    """Estimate dominant motif by periodicity scoring over sequence-derived candidates.
 
-    tract = tract.upper().replace("N", "")
-    if not tract:
+    Candidate motifs are collected from k-mers found anywhere in the tract, then
+    scored against the whole tract while allowing cyclic phase shifts. This makes
+    motif calling less sensitive to small boundary errors than using only the
+    first k bases of the predicted tract.
+    """
+
+    clean = "".join(base for base in tract.upper() if base in DNA_ALPHABET)
+    if not clean:
         return motif_vocab.decode(0), 0.0
 
-    best_motif = tract[:1]
+    vocab_max_len = max(len(motif) for motif in motif_vocab.motifs)
+    max_motif_len = min(max_motif_len or vocab_max_len, vocab_max_len, len(clean))
+    candidates: set[str] = set()
+    for k in range(1, max_motif_len + 1):
+        for start in range(0, len(clean) - k + 1):
+            motif = shortest_period(clean[start : start + k])
+            canonical = canonical_motif(motif, motif_vocab.collapse_reverse_complement)
+            if motif_vocab.get(canonical) is not None:
+                candidates.add(canonical)
+
+    if not candidates:
+        return motif_vocab.decode(0), 0.0
+
+    best_motif = motif_vocab.decode(0)
     best_score = -1.0
-    for k in range(1, min(max_motif_len, len(tract)) + 1):
-        motif = tract[:k]
-        motif = shortest_period(motif)
-        tiled = (motif * ((len(tract) // len(motif)) + 1))[: len(tract)]
-        matches = sum(a == b for a, b in zip(tract, tiled))
-        score = matches / len(tract)
-        canonical = canonical_motif(motif, motif_vocab.collapse_reverse_complement)
-        if motif_vocab.get(canonical) is not None and score > best_score:
+    best_rank = (-1.0, -1.0, 0)
+    for motif in candidates:
+        score = periodicity_score(clean, motif)
+        length_prior = (length_priors or {}).get(len(motif), 0.0)
+        rank = (score, length_prior, -len(motif))
+        if rank > best_rank:
+            best_rank = rank
             best_score = score
-            best_motif = canonical
+            best_motif = motif
     return best_motif, best_score
+
+
+def periodicity_score(tract: str, motif: str) -> float:
+    """Return the best match fraction between a tract and any motif phase."""
+
+    if not tract or not motif:
+        return 0.0
+    best = 0.0
+    for phased_motif in rotations(motif):
+        tiled = (phased_motif * ((len(tract) // len(phased_motif)) + 1))[: len(tract)]
+        matches = sum(a == b for a, b in zip(tract, tiled))
+        best = max(best, matches / len(tract))
+    return best
 
 
 def calls_from_logits(
@@ -86,14 +118,18 @@ def calls_from_logits(
     state_logits: torch.Tensor,
     motif_logits: torch.Tensor,
     motif_vocab: MotifVocab,
+    motif_length_logits: torch.Tensor | None = None,
     min_repeat_length: int = 3,
     merge_gap: int = 1,
+    min_sequence_motif_score: float = 0.30,
+    sequence_motif_confidence_weight: float = 0.8,
 ) -> list[RepeatCall]:
     """Create repeat calls from raw model logits for one sequence."""
 
     length = len(sequence)
     state_probs = torch.softmax(state_logits[:length], dim=-1)
     motif_probs = torch.softmax(motif_logits[:length], dim=-1)
+    motif_length_probs = torch.softmax(motif_length_logits[:length], dim=-1) if motif_length_logits is not None else None
     states = state_probs.argmax(dim=-1).cpu().tolist()
     regions = contiguous_regions(repeat_mask_from_states(states), min_repeat_length, merge_gap)
 
@@ -105,10 +141,19 @@ def calls_from_logits(
         model_motifs = motif_pred[start:end].cpu().tolist()
         motif_id, count = Counter(model_motifs).most_common(1)[0]
         model_motif = motif_vocab.decode(motif_id)
-        seq_motif, seq_score = estimate_motif_from_sequence(tract, motif_vocab)
-        motif = seq_motif if seq_score >= 0.70 else model_motif
+        length_priors = None
+        if motif_length_probs is not None:
+            mean_length_probs = motif_length_probs[start:end].mean(dim=0)
+            length_priors = {idx + 1: float(value.item()) for idx, value in enumerate(mean_length_probs)}
+        seq_motif, seq_score = estimate_motif_from_sequence(tract, motif_vocab, length_priors=length_priors)
+        motif = seq_motif if seq_score >= min_sequence_motif_score else model_motif
         motif_length = len(motif)
-        confidence = float((repeat_prob[start:end].mean() * motif_probs[start:end, motif_id].mean()).item())
+        selected_motif_id = motif_vocab.get(motif, motif_id)
+        model_support = motif_probs[start:end, int(selected_motif_id)].mean()
+        motif_confidence = sequence_motif_confidence_weight * seq_score + (
+            1.0 - sequence_motif_confidence_weight
+        ) * float(model_support.item())
+        confidence = float((repeat_prob[start:end].mean() * motif_confidence).item())
         calls.append(
             RepeatCall(
                 sequence_id=sequence_id,

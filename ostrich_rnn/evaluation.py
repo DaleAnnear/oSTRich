@@ -7,7 +7,7 @@ from statistics import mean
 
 import torch
 
-from .labels import PAD_MOTIF_LABEL, PAD_STATE_LABEL, RepeatState
+from .labels import PAD_MOTIF_LABEL, PAD_MOTIF_LENGTH_LABEL, PAD_STATE_LABEL, RepeatState
 from .motifs import MotifVocab
 from .postprocess import RepeatCall, calls_from_logits
 
@@ -36,6 +36,14 @@ def motif_accuracy(motif_logits: torch.Tensor, motif_labels: torch.Tensor) -> fl
         return 0.0
     pred = motif_logits.argmax(dim=-1)
     return float((pred[valid] == motif_labels[valid]).float().mean().item())
+
+
+def motif_length_accuracy(motif_length_logits: torch.Tensor, motif_length_labels: torch.Tensor) -> float:
+    valid = motif_length_labels != PAD_MOTIF_LENGTH_LABEL
+    if not bool(valid.any()):
+        return 0.0
+    pred = motif_length_logits.argmax(dim=-1)
+    return float((pred[valid] == motif_length_labels[valid]).float().mean().item())
 
 
 def interval_iou(a: tuple[int, int], b: tuple[int, int]) -> float:
@@ -112,6 +120,7 @@ def tract_metrics(
 class EvaluationResult:
     base: dict
     motif_accuracy: float
+    motif_length_accuracy: float
     tract: dict
 
 
@@ -120,6 +129,7 @@ def evaluate_model(model, dataloader, motif_vocab: MotifVocab, device: torch.dev
     model.eval()
     base_scores = []
     motif_scores = []
+    motif_length_scores = []
     all_predictions: list[list[RepeatCall]] = []
     all_truths: list[list[dict]] = []
     for batch in dataloader:
@@ -127,9 +137,11 @@ def evaluate_model(model, dataloader, motif_vocab: MotifVocab, device: torch.dev
         lengths = batch.lengths.to(device)
         state_labels = batch.state_labels.to(device)
         motif_labels = batch.motif_labels.to(device)
+        motif_length_labels = batch.motif_length_labels.to(device)
         outputs = model(input_ids, lengths)
         base_scores.append(base_repeat_metrics(outputs.state_logits.cpu(), state_labels.cpu()))
         motif_scores.append(motif_accuracy(outputs.motif_logits.cpu(), motif_labels.cpu()))
+        motif_length_scores.append(motif_length_accuracy(outputs.motif_length_logits.cpu(), motif_length_labels.cpu()))
         for i, sequence in enumerate(batch.sequences):
             length = len(sequence)
             all_predictions.append(
@@ -138,6 +150,7 @@ def evaluate_model(model, dataloader, motif_vocab: MotifVocab, device: torch.dev
                     sequence=sequence,
                     state_logits=outputs.state_logits[i, :length].cpu(),
                     motif_logits=outputs.motif_logits[i, :length].cpu(),
+                    motif_length_logits=outputs.motif_length_logits[i, :length].cpu(),
                     motif_vocab=motif_vocab,
                 )
             )
@@ -147,5 +160,6 @@ def evaluate_model(model, dataloader, motif_vocab: MotifVocab, device: torch.dev
     return EvaluationResult(
         base=base,
         motif_accuracy=mean(motif_scores) if motif_scores else 0.0,
+        motif_length_accuracy=mean(motif_length_scores) if motif_length_scores else 0.0,
         tract=tract_metrics(all_predictions, all_truths),
     )

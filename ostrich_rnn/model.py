@@ -15,6 +15,7 @@ from .encoding import PAD_BASE_ID
 class ModelOutput:
     state_logits: torch.Tensor
     motif_logits: torch.Tensor
+    motif_length_logits: torch.Tensor
 
 
 class RNNSTRDetector(nn.Module):
@@ -29,6 +30,7 @@ class RNNSTRDetector(nn.Module):
         num_layers: int = 2,
         dropout: float = 0.2,
         rnn_type: str = "lstm",
+        motif_length_classes: int = 6,
     ):
         super().__init__()
         self.config = {
@@ -39,6 +41,7 @@ class RNNSTRDetector(nn.Module):
             "num_layers": num_layers,
             "dropout": dropout,
             "rnn_type": rnn_type,
+            "motif_length_classes": motif_length_classes,
         }
         self.embedding = nn.Embedding(base_vocab_size, embedding_dim, padding_idx=PAD_BASE_ID)
         rnn_cls = nn.LSTM if rnn_type.lower() == "lstm" else nn.GRU
@@ -54,6 +57,7 @@ class RNNSTRDetector(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.state_head = nn.Linear(feature_dim, 4)
         self.motif_head = nn.Linear(feature_dim, motif_classes)
+        self.motif_length_head = nn.Linear(feature_dim, motif_length_classes)
 
     def forward(self, input_ids: torch.Tensor, lengths: torch.Tensor) -> ModelOutput:
         embedded = self.embedding(input_ids)
@@ -69,4 +73,5 @@ class RNNSTRDetector(nn.Module):
         return ModelOutput(
             state_logits=self.state_head(features),
             motif_logits=self.motif_head(features),
+            motif_length_logits=self.motif_length_head(features),
         )
