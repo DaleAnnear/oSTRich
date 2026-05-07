@@ -1,0 +1,95 @@
+{
+  "benchmark_name": "batch_hidden_layers_epochs_curriculum_pilot",
+  "output_root": "benchmarks",
+  "device": "auto",
+  "continue_on_error": true,
+  "dataset": {
+    "train_size": 128,
+    "val_size": 32,
+    "sequence_length": 384,
+    "min_repeats_per_sequence": 1,
+    "max_repeats_per_sequence": 3,
+    "min_motif_len": 1,
+    "max_motif_len": 6,
+    "min_copy_number": 3,
+    "max_copy_number": 60,
+    "compound_probability": 0.2,
+    "max_compound_motifs": 3,
+    "substitution_rate": 0.0,
+    "insertion_rate": 0.0,
+    "deletion_rate": 0.0,
+    "motif_interruption_rate": 0.0,
+    "interruption_min_len": null,
+    "interruption_max_len": null,
+    "seed": 7,
+    "collapse_reverse_complement": false
+  },
+  "holdout": {
+    "size": 64,
+    "sequence_length": 384,
+    "min_repeats_per_sequence": 1,
+    "max_repeats_per_sequence": 3,
+    "max_copy_number": 60,
+    "compound_probability": 0.3,
+    "substitution_rate": 0.005,
+    "insertion_rate": 0.001,
+    "deletion_rate": 0.001,
+    "motif_interruption_rate": 0.02,
+    "seed": 1007
+  },
+  "model": {
+    "embedding_dim": 16,
+    "dropout": 0.2,
+    "rnn_type": "lstm"
+  },
+  "training": {
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "motif_loss_weight": 0.2,
+    "motif_length_loss_weight": 0.1,
+    "motif_class_weighting": true,
+    "patience": 3,
+    "num_workers": 0
+  },
+  "curriculum": {
+    "phases": [
+      {
+        "name": "phase1_perfect",
+        "dataset": {
+          "compound_probability": 0.0,
+          "substitution_rate": 0.0,
+          "insertion_rate": 0.0,
+          "deletion_rate": 0.0,
+          "motif_interruption_rate": 0.0
+        }
+      },
+      {
+        "name": "phase2_low_imperfect",
+        "dataset": {
+          "compound_probability": 0.05,
+          "substitution_rate": 0.002,
+          "insertion_rate": 0.0005,
+          "deletion_rate": 0.0005,
+          "motif_interruption_rate": 0.01
+        }
+      },
+      {
+        "name": "phase3_harder_imperfect_compound",
+        "dataset": {
+          "compound_probability": 0.3,
+          "substitution_rate": 0.01,
+          "insertion_rate": 0.002,
+          "deletion_rate": 0.002,
+          "motif_interruption_rate": 0.05
+        }
+      }
+    ]
+  },
+  "matrix": {
+    "batch_size": [8, 16],
+    "hidden_dim": [64, 128],
+    "num_layers": [1, 2],
+    "epochs": [3, 6],
+    "curriculum": [false, true]
+  }
+}

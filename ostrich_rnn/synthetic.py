@@ -8,7 +8,7 @@ from typing import Iterable
 
 import numpy as np
 
-from .labels import PAD_MOTIF_LABEL, RepeatState
+from .labels import PAD_MOTIF_LABEL, PAD_MOTIF_LENGTH_LABEL, RepeatState
 from .motifs import DNA_ALPHABET, MotifVocab, canonical_motif
 
 
@@ -158,6 +158,7 @@ class SyntheticSTRGenerator:
         sequence = list(self.random_background())
         state_labels = [RepeatState.OUTSIDE] * self.sequence_length
         motif_labels = [PAD_MOTIF_LABEL] * self.sequence_length
+        motif_length_labels = [PAD_MOTIF_LENGTH_LABEL] * self.sequence_length
         repeats: list[RepeatAnnotation] = []
         occupied = np.zeros(self.sequence_length, dtype=bool)
 
@@ -186,9 +187,11 @@ class SyntheticSTRGenerator:
             motif_ids: list[int] = []
             for rel_start, rel_end, motif in spans:
                 motif_id = self.motif_vocab.encode(motif)
+                motif_length_id = len(motif) - 1
                 motif_ids.append(motif_id)
                 for pos in range(start + rel_start, min(start + rel_end, end)):
                     motif_labels[pos] = motif_id
+                    motif_length_labels[pos] = motif_length_id
 
             dominant_len = len(motifs[0])
             repeats.append(
@@ -217,6 +220,7 @@ class SyntheticSTRGenerator:
             "sequence": "".join(sequence),
             "state_labels": [int(label) for label in state_labels],
             "motif_labels": motif_labels,
+            "motif_length_labels": motif_length_labels,
             "repeats": [repeat.as_dict() for repeat in sorted(repeats, key=lambda r: r.start)],
         }
 
