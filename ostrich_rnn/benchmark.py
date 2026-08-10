@@ -592,6 +592,29 @@ def curriculum_phase_epoch_counts(curriculum_config: dict, total_epochs: int, ph
         if len(phase_epochs) != phase_count:
             raise ValueError("curriculum.phase_epochs must match the number of curriculum phases.")
         return [int(value) for value in phase_epochs]
+    phase_percentages = curriculum_config.get("phase_percentages")
+    if phase_percentages is not None:
+        if len(phase_percentages) != phase_count:
+            raise ValueError("curriculum.phase_percentages must match the number of curriculum phases.")
+        values = [float(value) for value in phase_percentages]
+        total = sum(values)
+        if total <= 0:
+            raise ValueError("curriculum.phase_percentages must sum to a positive value.")
+        raw = [int(total_epochs * value / total) for value in values]
+        counts = [max(1, count) for count in raw]
+        while sum(counts) < total_epochs:
+            remainders = [
+                (total_epochs * value / total) - int(total_epochs * value / total)
+                for value in values
+            ]
+            idx = max(range(phase_count), key=lambda item: remainders[item])
+            counts[idx] += 1
+        while sum(counts) > total_epochs:
+            idx = max(range(phase_count), key=lambda item: counts[item])
+            if counts[idx] <= 1:
+                break
+            counts[idx] -= 1
+        return counts
     return split_epochs(total_epochs, phase_count)
 
 

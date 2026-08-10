@@ -10,3 +10,4 @@ runs/
 workspace/smoke_runs/
 benchmarks/
 benchmark_configs/
+truth_sets/
