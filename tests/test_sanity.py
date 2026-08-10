@@ -19,6 +19,7 @@ from ostrich_rnn.synthetic_io import (
     save_synthetic_dataset,
 )
 from ostrich_rnn.training import class_weights_from_dataset
+from ostrich_rnn.truth_sets import extract_variation_clusters, iter_trexplorer_bed, summarize_trexplorer_bed
 
 
 def test_canonical_motif_rotations_and_reverse_complement():
@@ -194,6 +195,30 @@ def test_backfill_motif_length_labels_and_weights():
     weights = class_weights_from_dataset(dataset, "motif_labels", len(vocab), -100, torch.device("cpu"))
     assert weights is not None
     assert weights.shape[0] == len(vocab)
+
+
+def test_trexplorer_truth_set_parser_and_cluster_extraction(tmp_path):
+    bed_path = tmp_path / "trexplorer.bed"
+    bed_path.write_text(
+        "chr1\t10\t22\tID=1-10-22-CAG;MOTIFS=CAG;STRUC=<TR:1-10-22-CAG>\n"
+        "chr1\t30\t60\tID=1-35-48-CA;MOTIFS=CA;STRUC=<VC:1-30-60>\n"
+    )
+
+    rows = list(iter_trexplorer_bed(bed_path))
+    assert rows[0]["kind"] == "isolated_repeat"
+    assert rows[0]["motifs"] == ["CAG"]
+    assert rows[1]["kind"] == "variation_cluster"
+    assert rows[1]["structure"] == "1-30-60"
+
+    summary = summarize_trexplorer_bed(bed_path)
+    assert summary["total_records"] == 2
+    assert summary["kind_counts"] == {"isolated_repeat": 1, "variation_cluster": 1}
+
+    clusters_path = tmp_path / "clusters.bed.gz"
+    assert extract_variation_clusters(bed_path, clusters_path) == 1
+    cluster_rows = list(iter_trexplorer_bed(clusters_path))
+    assert len(cluster_rows) == 1
+    assert cluster_rows[0]["kind"] == "variation_cluster"
 
 
 def test_benchmark_pipeline_writes_artifacts(tmp_path):
